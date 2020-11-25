@@ -6,6 +6,19 @@ const MSG_ROUTE_LEN_BYTES = 1;
 const MSG_ROUTE_CODE_MAX = 0xffff;
 const MSG_COMPRESS_GZIP_ENCODE_MASK = 1 << 4;
 
+const MsgHasId = {
+  0: true,  // TYPE_REQUEST
+  1: false,  // TYPE_NOTIFY
+  2: true,  // TYPE_RESPONSE
+  3: false,  // TYPE_PUSH
+}
+
+const MsgHasRoute = {
+  0: true,  // TYPE_REQUEST
+  1: true,  // TYPE_NOTIFY
+  2: false,  // TYPE_RESPONSE
+  3: true,  // TYPE_PUSH
+}
 
 
 class Message {
@@ -26,10 +39,19 @@ class Message {
    */
   static encode (id, type, compressRoute, route, msg, compressGzip){
     // caculate message max length
-    let idBytes = msgHasId(type) ? caculateMsgIdBytes(id) : 0;
+    const bHasId = MsgHasId[type];
+    let idBytes = 0;
+    if( bHasId){
+      let idT = id;
+      do {
+        idBytes += 1;
+        idT >>= 7;
+      } while(idT > 0);
+    }
+
     let msgLen = MSG_FLAG_BYTES + idBytes;
 
-    if(msgHasRoute(type)) {
+    if(MsgHasRoute[type]) {
       if(compressRoute) {
         if(typeof route !== 'number'){
           throw new Error('error flag for number route!');
@@ -54,16 +76,52 @@ class Message {
     let offset = 0;
 
     // add flag
-    offset = encodeMsgFlag(type, compressRoute, buffer, offset, compressGzip);
+    if(type !== Message.TYPE_REQUEST && type !== Message.TYPE_NOTIFY &&
+        type !== Message.TYPE_RESPONSE && type !== Message.TYPE_PUSH) {
+      throw new Error('unkonw message type: ' + type);
+    }
+  
+    buffer[offset] = (type << 1) | (compressRoute ? 1 : 0);
+  
+    if(compressGzip) {
+      buffer[offset] = buffer[offset] | MSG_COMPRESS_GZIP_ENCODE_MASK;
+    }
+    offset += MSG_FLAG_BYTES;
 
     // add message id
-    if(msgHasId(type)) {
-      offset = encodeMsgId(id, buffer, offset);
+    if(bHasId) {
+      do{
+        let tmp = id % 128;
+        let next = Math.floor(id/128);
+    
+        if(next !== 0){
+          tmp = tmp + 128;
+        }
+        buffer[offset++] = tmp;
+        id = next;
+      } while(id !== 0);
     }
 
     // add route
-    if(msgHasRoute(type)) {
-      offset = encodeMsgRoute(compressRoute, route, buffer, offset);
+    if(MsgHasRoute[type]) {
+      if (compressRoute) {
+        if(route > MSG_ROUTE_CODE_MAX){
+          throw new Error('route number is overflow');
+        }
+    
+        buffer[offset++] = (route >> 8) & 0xff;
+        buffer[offset++] = route & 0xff;
+      } else {
+        if(route) {
+          const rLen = route.length;
+          buffer[offset++] = rLen & 0xff;
+          for( let i=0; i<rLen;i++ ){
+            buffer[offset++] = route.charCodeAt(i);
+          }
+        } else {
+          buffer[offset++] = 0;
+        }
+      }
     }
 
     // add body
@@ -76,80 +134,6 @@ class Message {
   }
 
 }
-
-
-function msgHasId(type) {
-  return type === Message.TYPE_REQUEST || type === Message.TYPE_RESPONSE;
-};
-
-function msgHasRoute(type) {
-  return type === Message.TYPE_REQUEST || type === Message.TYPE_NOTIFY || type === Message.TYPE_PUSH;
-};
-
-
-function caculateMsgIdBytes(id) {
-  let len = 0;
-  do {
-    len += 1;
-    id >>= 7;
-  } while(id > 0);
-  return len;
-};
-
-
-function encodeMsgFlag(type, compressRoute, buffer, offset, compressGzip) {
-  if(type !== Message.TYPE_REQUEST && type !== Message.TYPE_NOTIFY &&
-     type !== Message.TYPE_RESPONSE && type !== Message.TYPE_PUSH) {
-    throw new Error('unkonw message type: ' + type);
-  }
-
-  buffer[offset] = (type << 1) | (compressRoute ? 1 : 0);
-
-  if(compressGzip) {
-    buffer[offset] = buffer[offset] | MSG_COMPRESS_GZIP_ENCODE_MASK;
-  }
-
-  return offset + MSG_FLAG_BYTES;
-};
-
-
-function encodeMsgId(id, buffer, offset) {
-  do{
-    let tmp = id % 128;
-    let next = Math.floor(id/128);
-
-    if(next !== 0){
-      tmp = tmp + 128;
-    }
-    buffer[offset++] = tmp;
-
-    id = next;
-  } while(id !== 0);
-
-  return offset;
-};
-
-function encodeMsgRoute(compressRoute, route, buffer, offset) {
-  if (compressRoute) {
-    if(route > MSG_ROUTE_CODE_MAX){
-      throw new Error('route number is overflow');
-    }
-
-    buffer[offset++] = (route >> 8) & 0xff;
-    buffer[offset++] = route & 0xff;
-  } else {
-    if(route) {
-      buffer[offset++] = route.length & 0xff;
-      for( let i=0; i<route.length;i++ ){
-        buffer[offset++] = route.charCodeAt(i);
-      }
-    } else {
-      buffer[offset++] = 0;
-    }
-  }
-
-  return offset;
-};
 
 
 
